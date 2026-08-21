@@ -99,10 +99,15 @@ jobs:
             echo "Missing production secrets: ${missing[*]}" >&2
             exit 1
           fi
+          # Stray whitespace pasted into a secret is invisible in the logs, since
+          # the value is masked, and surfaces as a baffling "No such file or
+          # directory" from scp. Trim once here and reuse for the rest of the job.
+          for name in VPS_HOST VPS_USER VPS_APP_DIR; do
+            printf '%s=%s\n' "$name" "$(printf '%s' "${!name}" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          done
 
       - name: Configure SSH
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
@@ -118,19 +123,15 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Ship compose file to the server
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
         run: |
+          # The data directory still has to be created and chowned to uid 10001
+          # by hand once; this only guards the app directory itself.
+          ssh -i ~/.ssh/deploy_key "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_APP_DIR'"
           scp -i ~/.ssh/deploy_key infra/server/compose.yml \
             "$VPS_USER@$VPS_HOST:$VPS_APP_DIR/compose.yml"
 
       - name: Pull the pinned image and restart the stack
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           IMAGE: ${{ needs.build.outputs.image }}
         run: |
